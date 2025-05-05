@@ -21,6 +21,8 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+
+	metricsdk "go.opentelemetry.io/otel/sdk/metric"
 )
 
 func main() {
@@ -60,6 +62,14 @@ func main() {
 	otel.SetTracerProvider(traceProvider)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 	defer traceProvider.Shutdown(ctx)
+	// initialize metric exporter
+	metricReader, err := autoexport.NewMetricReader(ctx)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize metric reader")
+	}
+	metricProvider := metricsdk.NewMeterProvider(metricsdk.WithReader(metricReader))
+	otel.SetMeterProvider(metricProvider)
+	defer metricProvider.Shutdown(ctx)
 	engine := gin.New()
 	engine.Use(gin.Recovery())
 	engine.Use(otelgin.Middleware("ambulance-webapi"))
