@@ -1,22 +1,45 @@
 package main
 
 import (
-	"log"
 	"os"
 	"strings"
 
 	"context"
 	"time"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+
 	"github.com/PeterBartos157/ambulance-webapi/api"
 	"github.com/PeterBartos157/ambulance-webapi/internal/ambulance_wl"
 	"github.com/PeterBartos157/ambulance-webapi/internal/db_service"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+
+	"go.opentelemetry.io/contrib/exporters/autoexport"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	tracesdk "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func main() {
-	log.Printf("Server started")
+	output := zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: zerolog.TimeFormatUnix}
+	log.Logger = zerolog.New(output).With().
+		Str("service", "ambulance-wl-list").
+		Timestamp().
+		Caller().
+		Logger()
+
+	logLevelStr := os.Getenv("LOG_LEVEL")
+	defaultLevel := zerolog.InfoLevel
+	level, err := zerolog.ParseLevel(strings.ToLower(logLevelStr))
+	if err != nil {
+		log.Warn().Str("LOG_LEVEL", logLevelStr).Msgf("Invalid log level, using default: %s", defaultLevel)
+		level = defaultLevel
+	}
+	// Set the global log level
+	zerolog.SetGlobalLevel(level)
 	port := os.Getenv("AMBULANCE_API_PORT")
 	if port == "" {
 		port = "8080"
@@ -25,8 +48,21 @@ func main() {
 	if !strings.EqualFold(environment, "production") { // case insensitive comparison
 		gin.SetMode(gin.DebugMode)
 	}
+	// initialize trace exporter
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	traceExporter, err := autoexport.NewSpanExporter(ctx)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize trace exporter")
+	}
+
+	traceProvider := tracesdk.NewTracerProvider(tracesdk.WithBatcher(traceExporter))
+	otel.SetTracerProvider(traceProvider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	defer traceProvider.Shutdown(ctx)
 	engine := gin.New()
 	engine.Use(gin.Recovery())
+	engine.Use(otelgin.Middleware("ambulance-webapi"))
 	corsMiddleware := cors.New(cors.Config{
 		AllowOrigins:     []string{"*"},
 		AllowMethods:     []string{"GET", "PUT", "POST", "DELETE", "PATCH"},
